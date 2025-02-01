@@ -23,4 +23,4 @@ Claude 3.5 Sonnetを使用。
 - `max_workers`: 並列処理数（デフォルト: 0、自動で最適な値を設定）
 - `exclude`: 除外設定
   - `directories`: 除外するディレクトリ名のリスト
-  - `extensions`: 除外するファイル拡張子のリスト（デフォルト: ['.cue']）
+  - `extensions`: 除外するファイル拡張子のリスト

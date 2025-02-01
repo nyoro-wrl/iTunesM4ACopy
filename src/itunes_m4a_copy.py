@@ -38,7 +38,7 @@ class Config:
         'max_workers': 0,
         'exclude': {
             'directories': [],
-            'extensions': ['.cue']
+            'extensions': []
         }
     }
 
@@ -92,7 +92,7 @@ class Config:
             aac_bitrate=config_data.get('aac_bitrate', 320),
             max_workers=config_data.get('max_workers', 0),
             exclude_dirs=exclude.get('directories', []),
-            exclude_extensions=exclude.get('extensions', ['.cue'])
+            exclude_extensions=exclude.get('extensions', [])
         )
 
     def save(self, config_path: str) -> None:

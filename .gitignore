@@ -38,18 +38,6 @@ ENV/
 # 設定ファイル（ユーザー固有の設定）
 config.yaml
 
-# 音声ファイル
-*.mp3
-*.m4a
-*.flac
-*.ogg
-*.wav
-*.aiff
-*.aif
-*.aa
-*.aax
-*.cue
-
 # Windows
 Thumbs.db
 ehthumbs.db
