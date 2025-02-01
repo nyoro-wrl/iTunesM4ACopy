@@ -305,7 +305,10 @@ class AudioFileProcessor:
         """入力と出力のファイルを比較する"""
         # 進捗表示の準備（100%を3つのフェーズに分割）
         with tqdm(total=100, desc="ファイル分析中", bar_format='{desc}: {percentage:3.0f}%|{bar}| [{elapsed}<{remaining}]') as pbar:
+            # 入力ファイルのスキャン（30%）
             input_files = self.scan_directory(self.input_dir, 30, pbar)
+            
+            # 出力ファイルのスキャン（30%）
             output_files = self.scan_directory(self.output_dir, 30, pbar)
 
             to_copy = []  # 新規コピー
@@ -313,11 +316,13 @@ class AudioFileProcessor:
             to_delete = []  # 削除
             unchanged = []  # 変更なし
             
-            # 比較処理の進捗計算用
+            # 比較処理の進捗計算用（残りの40%）
             total_comparisons = len(input_files) + len(output_files)
             if total_comparisons > 0:
                 comparison_step = 40 / total_comparisons
             else:
+                # ファイルがない場合は残りの進捗を一度に更新
+                pbar.update(40)
                 comparison_step = 0
             
             # 入力ファイルの処理
@@ -340,6 +345,11 @@ class AudioFileProcessor:
                 if in_path not in input_files:
                     to_delete.append((in_path, out_path))
                 pbar.update(comparison_step)
+
+            # 進捗が100%に達していない場合は残りを更新
+            remaining = 100 - pbar.n
+            if remaining > 0:
+                pbar.update(remaining)
 
         # 分析完了後にログを出力
         for in_path, out_path in to_delete:
