@@ -10,8 +10,6 @@ from datetime import datetime
 from typing import Dict, List, Set, Tuple, Union
 from dataclasses import dataclass
 from tqdm import tqdm
-from mutagen import File as MutagenFile
-from mutagen.mp4 import MP4Cover
 import multiprocessing
 import locale
 import unicodedata
@@ -183,125 +181,6 @@ class AudioFileProcessor:
     def _normalize_string(self, s: str) -> str:
         """文字列を正規化する"""
         return unicodedata.normalize('NFKC', s)
-
-    def _copy_artwork(self, input_metadata, output_metadata) -> None:
-        """アートワークをコピーする"""
-        try:
-            # OGGファイルの場合
-            if hasattr(input_metadata, 'tags') and hasattr(input_metadata.tags, 'get'):
-                metadata = input_metadata.tags
-                # OGGのメタデータ画像を探す
-                for key in ['metadata_block_picture', 'METADATA_BLOCK_PICTURE']:
-                    if key in metadata:
-                        try:
-                            import base64
-                            from mutagen.flac import Picture
-                            # Base64でエンコードされた画像データをデコード
-                            picture_data = base64.b64decode(metadata[key][0])
-                            picture = Picture(picture_data)
-                            
-                            if hasattr(output_metadata, 'tags'):
-                                # MP4の場合
-                                if picture.mime == 'image/jpeg':
-                                    output_metadata.tags['covr'] = [MP4Cover(picture.data, MP4Cover.FORMAT_JPEG)]
-                                elif picture.mime == 'image/png':
-                                    output_metadata.tags['covr'] = [MP4Cover(picture.data, MP4Cover.FORMAT_PNG)]
-                        except Exception as e:
-                            logger.debug(f"OGG画像の変換に失敗しました: {e}")
-                            continue
-
-            # FLACの場合
-            elif hasattr(input_metadata, 'pictures'):
-                for pic in input_metadata.pictures:
-                    try:
-                        if not pic.mime:
-                            continue
-                        if hasattr(output_metadata, 'pictures'):
-                            # FLACの場合
-                            output_metadata.pictures.append(pic)
-                        elif hasattr(output_metadata, 'tags'):
-                            # MP4の場合
-                            if pic.mime == 'image/jpeg':
-                                output_metadata.tags['covr'] = [MP4Cover(pic.data, MP4Cover.FORMAT_JPEG)]
-                            elif pic.mime == 'image/png':
-                                output_metadata.tags['covr'] = [MP4Cover(pic.data, MP4Cover.FORMAT_PNG)]
-                    except Exception as e:
-                        logger.debug(f"FLAC画像の変換に失敗しました: {e}")
-                        continue
-
-            # MP4/M4Aの場合
-            elif hasattr(input_metadata, 'tags') and 'covr' in input_metadata.tags:
-                if hasattr(output_metadata, 'tags'):
-                    output_metadata.tags['covr'] = input_metadata.tags['covr']
-
-            # ID3の場合（MP3など）
-            elif hasattr(input_metadata, 'tags'):
-                for key in input_metadata.tags.keys():
-                    if 'APIC' in key:
-                        try:
-                            artwork = input_metadata.tags[key]
-                            if hasattr(output_metadata, 'tags'):
-                                if artwork.mime in ['image/jpeg', 'image/png']:
-                                    output_metadata.tags['covr'] = [MP4Cover(artwork.data, 
-                                        MP4Cover.FORMAT_JPEG if artwork.mime == 'image/jpeg' else MP4Cover.FORMAT_PNG)]
-                        except Exception as e:
-                            logger.debug(f"ID3画像の変換に失敗しました: {e}")
-                            continue
-
-        except Exception as e:
-            logger.debug(f"アートワークのコピーに失敗しました: {e}")
-
-    def _copy_metadata(self, input_metadata, output_metadata) -> None:
-        """メタデータをコピーする"""
-        try:
-            # OGGファイルの場合
-            if hasattr(input_metadata, 'tags') and hasattr(input_metadata.tags, 'get'):
-                # OGGの一般的なタグをMP4のタグに変換
-                tag_mapping = {
-                    'title': '\xa9nam',
-                    'artist': '\xa9ART',
-                    'album': '\xa9alb',
-                    'date': '\xa9day',
-                    'genre': '\xa9gen',
-                    'tracknumber': 'trkn',
-                    'discnumber': 'disk',
-                    'composer': '\xa9wrt',
-                    'albumartist': 'aART',
-                    'comment': '\xa9cmt',
-                    'copyright': 'cprt',
-                    'lyrics': '\xa9lyr',
-                }
-
-                for ogg_tag, mp4_tag in tag_mapping.items():
-                    value = input_metadata.tags.get(ogg_tag, None)
-                    if value:
-                        if mp4_tag in ['trkn', 'disk']:
-                            # トラック番号とディスク番号の処理
-                            try:
-                                # "1/10" 形式の場合は分割
-                                if isinstance(value, list):
-                                    value = value[0]
-                                if '/' in str(value):
-                                    num, total = map(int, str(value).split('/'))
-                                    output_metadata[mp4_tag] = [(num, total)]
-                                else:
-                                    output_metadata[mp4_tag] = [(int(str(value)), 0)]
-                            except (ValueError, IndexError):
-                                logger.debug(f"トラック/ディスク番号の変換に失敗: {value}")
-                        else:
-                            # 文字列の場合はそのままコピー
-                            if isinstance(value, list):
-                                value = value[0]
-                            output_metadata[mp4_tag] = str(value)
-
-            # MP4/M4A/MP3の場合
-            elif hasattr(input_metadata, 'tags'):
-                for key, value in input_metadata.tags.items():
-                    if key != 'covr':  # アートワークは別途処理
-                        output_metadata[key] = value
-
-        except Exception as e:
-            logger.debug(f"メタデータのコピーに失敗しました: {e}")
 
     def _should_exclude(self, path: Path, is_input: bool = False) -> bool:
         """パスが除外対象かどうかを判定する"""
@@ -494,6 +373,39 @@ class AudioFileProcessor:
             return False
         return True
 
+    def _build_ffmpeg_command(self, input_path: str, input_abs_path: str, output_abs_path: str) -> list:
+        """ffmpegコマンドを構築する"""
+        # 入力ファイルの形式を判定
+        is_lossless = any(fmt in input_path.lower() for fmt in ['.flac', '.wav', '.aiff', '.alac'])
+        is_ogg = input_path.lower().endswith('.ogg')
+
+        # 基本オプション
+        cmd = [
+            str(self.ffmpeg_path),
+            '-hide_banner',     # バナー表示を抑制
+            '-loglevel', 'warning',  # warning以上のみ表示
+            '-i', input_abs_path,    # 入力ファイル
+        ]
+
+        # メタデータオプション
+        if is_ogg:
+            cmd.extend(['-map_metadata', '0:s'])
+
+        # エンコードオプション
+        cmd.extend([
+            '-c:v', 'copy',     # ビデオストリームはそのままコピー
+            '-c:a', 'alac' if is_lossless else 'aac',  # オーディオコーデック
+        ])
+
+        # ビットレートオプション（非可逆圧縮の場合のみ）
+        if not is_lossless:
+            cmd.extend(['-b:a', f'{self.config.aac_bitrate}k'])
+
+        # 出力オプション
+        cmd.extend(['-y', output_abs_path])  # 出力先（上書き許可）
+
+        return cmd
+
     def process_file(self, input_path: str) -> bool:
         """ファイルを処理する"""
         try:
@@ -503,32 +415,8 @@ class AudioFileProcessor:
             # 出力先のディレクトリを作成
             os.makedirs(os.path.dirname(output_abs_path), exist_ok=True)
 
-            # メタデータを取得
-            metadata = MutagenFile(input_abs_path)
-
-            # 入力ファイルの形式を判定
-            is_lossless = any(fmt in input_path.lower() for fmt in ['.flac', '.wav', '.aiff', '.alac'])
-            
             # ffmpegコマンドを構築
-            cmd = [
-                str(self.ffmpeg_path),
-                '-hide_banner',  # バナー表示を抑制
-                '-loglevel', 'warning',  # warning以上のみ表示
-                '-i', input_abs_path,
-                '-vn',  # 映像ストリームを無視
-            ]
-
-            # ロスレス形式の場合はALAC、それ以外はAACを使用
-            if is_lossless:
-                cmd.extend(['-c:a', 'alac'])
-            else:
-                cmd.extend([
-                    '-c:a', 'aac',
-                    '-b:a', f'{self.config.aac_bitrate}k'
-                ])
-
-            # 出力ファイルを追加
-            cmd.extend(['-y', output_abs_path])
+            cmd = self._build_ffmpeg_command(input_path, input_abs_path, output_abs_path)
 
             # ffmpegを実行
             try:
@@ -543,22 +431,6 @@ class AudioFileProcessor:
             except subprocess.CalledProcessError as e:
                 logger.error(f"ffmpegの実行に失敗しました: {e.stderr.decode(SYSTEM_ENCODING, errors='replace')}")
                 return False
-
-            # メタデータとアートワークを転送
-            if metadata:
-                try:
-                    output_metadata = MutagenFile(output_abs_path)
-                    if output_metadata:
-                        # メタデータをコピー
-                        self._copy_metadata(metadata, output_metadata)
-                        
-                        # アートワークをコピー
-                        self._copy_artwork(metadata, output_metadata)
-                        
-                        # 変更を保存
-                        output_metadata.save()
-                except Exception as e:
-                    logger.debug(f"メタデータの転送に失敗しました: {e}")
 
             return True
         except Exception as e:
